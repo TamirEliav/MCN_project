@@ -2,13 +2,19 @@
 clear
 clc
 
+%% TODO:
+% add basline term b
+% add regularization for smoothness in W
+% add regularization for smoothness in V
+% change V to be sparse and change the regularization on V to be sparse
+
 %% create real tuning (pos)
-n1 = 10;
-n2 = 10;
+n1 = 4;
+n2 = 4;
 k1 = 20;
 k2 = 20;
 M = zeros(n1,n2,k1,k2);
-Sigma=10;
+Sigma=5;
 n_to_k_factor=k1/n1;
 x = 1:k1;
 y = 1:k2;
@@ -20,7 +26,8 @@ for ii = 1:n1
     end
 end
 M2 = reshape(M,[n1*n2 k1*k2]);
-M2 = M2.*20; % set max FR
+max_FR = 20;
+M2 = M2.*max_FR; % set max FR
 
 %% add tuning to other params (HD)
 HD_nbins = 100;
@@ -54,7 +61,7 @@ for ii = 1:n1
 end
 
 %% create behavior
-T = 9000;
+T = 5000;
 rng(0);
 sdf = 5.*randn(2,T);
 sdf(:,1) = [k1 k2]./2;
@@ -106,7 +113,7 @@ axis tight
 %% plot nice behavior figure
 figure
 hold on
-IX = 1:7000;
+IX = 1:5000;
 % plot(smooth(xy(1,IX)), smooth(xy(2,IX)),'-k')
 plot(xy(1,IX), xy(2,IX),'-k')
 axis equal
@@ -149,35 +156,35 @@ axis tight
 
 %% create activity matrix from position FR map
 pos_IX = sub2ind([k1 k2], xy_binned(1,:), xy_binned(2,:));
-FR = M2(:,pos_IX);
+FR = log(M2(:,pos_IX));
 
 %% add low-dim activity
 rng(0);
 N = size(FR,1);
 R = 2;
 T = size(FR,2);
-U = randn(N,R);
-V = randn(R,T).*5;
-h = fspecial('gaussian',[1 1000],250)*10;
-V2 = imfilter(V,h);
-FR = FR + U*V2;
-FR(FR<0) = 0; % make sure no negative FR
+U2 = randn(N,R);
+V2 = randn(R,T).*5;
+h = fspecial('gaussian',[1 1000],250);
+V2 = imfilter(V2,h);
 figure
 hold on
-% plot(V')
 plot(V2')
+
+% FR = FR + U2*V2;
 
 %% add activity dependent on other variables (HD/speed)
 % FR = FR + HD_FR(:,HD_IX);
 
 %% generate poisson spikes from FR
-spikes = poissrnd(FR);
+rng(0);
+spikes = poissrnd(exp(FR));
 
 %% plot activity of single cell
 figure
-plot(FR(2,:))
+plot(exp(FR(2,:)))
 
-%% validatre we get nice tuning curves
+%% validate we get nice tuning curves
 % time_spent = histcounts(
 cell_num = 46;
 A=accumarray(xy_binned(1,:)', FR(cell_num,:)',[k1 1],@mean,nan);
@@ -215,7 +222,7 @@ scatter3(Y2(:,1),Y2(:,2),Y2(:,3),5)
 
 %% PCA
 cmap = jet(k1);
-[coeff,score,latent,tsquared,explained,mu] = pca(FR');
+[coeff,score,latent,tsquared,explained,mu] = pca(spikes');
 figure
 scatter3(score(:,1),score(:,2),score(:,3),5,cmap(xy_binned(1,:),:));
 figure
@@ -246,7 +253,6 @@ pos(IX) = 1;
 
 %% try our model
 Y = spikes;
-% X = xy(1,:);
 X = pos;
 N = size(spikes,1);
 T = size(spikes,2);
@@ -259,95 +265,71 @@ nIter = 10;
 tic
 fval=[];
 options = optimoptions('fminunc','SpecifyObjectiveGradient',true);
-U(:)=0;
-V(:)=0;
+% options = optimoptions('fmincon','SpecifyObjectiveGradient',true);
+% options.CheckGradients = true;
+% U(:)=0;
+% V(:)=0;
 for iter=1:nIter
-    disp(iter)
+    disp(iter);
+%     A = sparse(-eye(numel(W)));
+%     b = sparse(10*ones(numel(W),1));
+%     lb = -10*ones(numel(W),1);
+%     [W fval(1,iter)] = fmincon(@(W)optW(Y,U,V,W,X),W,A,b,[],[],[],[],[],options);
+%     [W fval(1,iter)] = fmincon(@(W)optW(Y,U,V,W,X),W,[],[],[],[],lb,[],[],options);
     [W fval(1,iter)] = fminunc(@(W)optW(Y,U,V,W,X),W,options);
-%     [U fval(2,iter)] = fminunc(@(U)optU(Y,U,V,W,X),U,options);
-%     [V fval(3,iter)] = fminunc(@(V)optV(Y,U,V,W,X),V,options);
+    [U fval(2,iter)] = fminunc(@(U)optU(Y,U,V,W,X),U,options);
+    [V fval(3,iter)] = fminunc(@(V)optV(Y,U,V,W,X),V,options);
 end
 toc
 
-
-%% try simple PCA model
-N = size(FR,1);
-T = size(FR,2);
-r = 2;
-P = 1;
-% X = xy(1,:);
-Y = FR;
-Y = Y - mean(Y,2);
-U = randn(N,r);
-V = randn(r,T);
-% W = randn(n,k);
-nIter = 10;
-tic
-loss=[];
-for iter=1:nIter
-    disp(iter)
-    U = Y/V;
-    V = U\Y;
-%     [U fval(1,iter)] = fminunc(@(U)(norm(Y-U*V,'fro')), U);
-%     [V fval(2,iter)] = fminunc(@(V)(norm(Y-U*V,'fro')), V);
-    loss(iter) = norm(Y-U*V, 'fro');
-%     figure
-%     plot(V(1,:),V(2,:),'.')
-end
-toc
-figure
-plot(V(1,:),V(2,:),'.')
-
-%% try only to explain X
-Y = FR;
-% Y = Y - mean(Y,2);
-N = size(Y,1);
-T = size(Y,2);
-X = xy(1:2,:);
-P = size(X,1);
-% W = randn(n,k);
-% r = 2;
-% U = randn(n,r);
-% V = randn(r,T);
-nIter = 10;
-tic
-loss=[];
-for iter=1:nIter
-    disp(iter)
-    U = Y/V;
-    V = U\Y;
-%     [U fval(1,iter)] = fminunc(@(U)(norm(Y-U*V,'fro')), U);
-%     [V fval(2,iter)] = fminunc(@(V)(norm(Y-U*V,'fro')), V);
-    loss(iter) = norm(Y-U*V, 'fro');
-    figure
-    plot(V(1,:),V(2,:),'.')
-end
-toc
+%% check UV vs. UV2
+corr(V',V2')
+corr(U,U2)
+% corr()
+% corr(V2',imfilter(V,h)');
+% [rho,pval] = corr(imfilter(randn(R,T),h)', imfilter(randn(R,T),h)');
+% [rho,pval] = corr(randn(R,T)',randn(R,T)')
 
 %%
 figure
-for cell=1:100
-%     imagesc(exp(reshape(W(cell,:)',[k1 k2])))
-    imagesc(reshape(W(cell,:)',[k1 k2]));
+hold on
+% plot(imfilter(V,h)')
+plot(V')
+plot(V2')
+
+%% plot W as image per cell
+figure
+for cell=1:size(W,1)
+    imagesc(exp(reshape(W(cell,:)',[k1 k2])))
+%     imagesc(reshape(W(cell,:)',[k1 k2]));
+    title("cell"+cell)
     colorbar
     pause
+    pause(0.05)
 end
 
 %% optimization functions
 function [f,g] = optW(Y,U,V,W,X)
     Yhat = U*V + W*X;
-    f = sum(Yhat.*Y-exp(Yhat),'all');
-    g = (Y-exp(Yhat))*X';
+    f = -sum(Yhat.*Y-exp(Yhat),'all');
+    g = -(Y-exp(Yhat))*X';
+%     % add L2 regularization for W
+%     f = f + norm(W,'fro')^2;
+%     g = g + 2*W;
 end
 function [f,g] = optU(Y,U,V,W,X)
     Yhat = U*V + W*X;
     f = sum(Yhat.*Y-exp(Yhat),'all');
     g = (Y-exp(Yhat))*V';
+    f = -f;
+    g = -g;
 end
 function [f,g] = optV(Y,U,V,W,X)
     Yhat = U*V + W*X;
     f = sum(Yhat.*Y-exp(Yhat),'all');
     g = U'*(Y-exp(Yhat));
+    f = -f;
+    g = -g;
 end
 
 
