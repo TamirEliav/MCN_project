@@ -62,7 +62,7 @@ for ii = 1:n1
 end
 
 %% create behavior
-T = 5000;
+T = 1000;
 rng(0);
 sdf = 2.*randn(2,T);
 sdf(:,1) = [k1 k2]./2;
@@ -275,9 +275,9 @@ T = size(spikes,2);
 P = size(X,1);
 R = 1;
 U = rand(N,R);
-V = rand(R,T);
-W = rand(N,P).*20;
-nIter = 50;
+V = randn(R,T);
+W = rand(N,P).*sqrt(log(20));
+nIter = 10;
 tic
 options = optimoptions('fminunc','SpecifyObjectiveGradient',true);
 % options = optimoptions('fmincon','SpecifyObjectiveGradient',true);
@@ -333,12 +333,26 @@ subplot(212)
 plot(V2')
 
 %% check UV vs. UV2
-corr(V',V2')
-corr(U,U2)
-% corr()
-% corr(V2',imfilter(V,h)');
-% [rho,pval] = corr(imfilter(randn(R,T),h)', imfilter(randn(R,T),h)');
-% [rho,pval] = corr(randn(R,T)',randn(R,T)')
+figure
+subplot(221)
+plot(V2,V,'.')
+axis equal
+xlabel('real')
+ylabel('estimated')
+title('V')
+subplot(222)
+plot(U2,U,'.')
+% axis equal
+xlabel('real')
+ylabel('estimated')
+title('U')
+subplot(212)
+hold on
+plot(zscore(V))
+plot(-zscore(V))
+plot(zscore(V2),'k','linewidth',2)
+title('V vs V2 (zscore)')
+legend({'estimated','-estimated','real'})
 
 %%
 figure
@@ -357,20 +371,54 @@ for cell=1:size(W,1)
 %     pause
     pause(0.05)
 end
+%%
+figure
+subplot(311)
+imagesc(U2*V2)
+colorbar
+title('real')
+
+subplot(312)
+imagesc(U*V)
+title('estimated')
+colorbar
+
+subplot(313)
+imagesc(zscore(U*V,1,2))
+title('estimated (zscored)')
+colorbar
+
+%%
+figure
+histogram(max(exp(W)))
+h=xline(max_FR);
+h.Color = 'r';
+h.LineWidth = 2;
+xlabel('max FR');
+ylabel('counts');
+legend({'estimated';'real'})
+h=gca;
+h.XScale = 'log';
+title('max W vs. max real pos FR')
 
 %% optimization functions
 function [f,g] = optW(Y,U,V,W,X)
     Yhat = U*V + W*X;
     f = -sum(Yhat.*Y-exp(Yhat),'all');
     g = -(Y-exp(Yhat))*X';
-%     % add L2 regularization for W
-%     f = f + norm(W,'fro')^2;
-%     g = g + 2*W;
+    % add L2 regularization for W
+    lambda = 1;
+    f = f + lambda*norm(W,'fro')^2;
+    g = g + 2*lambda*W;
 end
 function [f,g] = optU(Y,U,V,W,X)
     Yhat = U*V + W*X;
     f = -sum(Yhat.*Y-exp(Yhat),'all');
     g = -(Y-exp(Yhat))*V';
+    % add L2 regularization for U
+    lambda = 1;
+    f = f + lambda*norm(U,'fro')^2;
+    g = g + 2*lambda*U;
 end
 function [f,g] = optV(Y,U,V,W,X)
     Yhat = U*V + W*X;
@@ -380,15 +428,12 @@ function [f,g] = optV(Y,U,V,W,X)
     Vpad = padarray(V,[0 1],'replicate','both');
     lambda = 1e3;
     f = f + lambda*sum(diff(Vpad,1,2).^2,'all');
-%     f = f + lambda*sum(V.^2,'all');
     g = g + 2*lambda.*( 2*V -Vpad(1:end-2) -Vpad(3:end) );
-%     g = g + 2*lambda.*(diff(Vpad(:,1:end-1),1,2) - diff(fliplr(Vpad(:,2:end)),1,2));
-%     g = g + 2*lambda.*( Vpad(:,3:end)-Vpad(:,1:end-2) );
-%     g = g + 2*lambda.*(  diff(fliplr(Vpad(:,1:end-1)),1,2) );
-%     g = g + 2*lambda.*V;
 
 end
-
+function [f,g] = optUW(Y,U,V,W,X)
+    
+end
 
 
 %%
