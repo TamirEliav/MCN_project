@@ -3,18 +3,19 @@ clear
 clc
 
 %% TODO:
+% add orthogonality constrain on UV
 % add basline term b
 % add regularization for smoothness in W
 % add regularization for smoothness in V
 % change V to be sparse and change the regularization on V to be sparse
 
 %% create real tuning (pos)
-n1 = 4;
-n2 = 4;
-k1 = 20;
-k2 = 20;
+n1 = 10;
+n2 = 10;
+k1 = 5;
+k2 = 5;
 M = zeros(n1,n2,k1,k2);
-Sigma=5;
+Sigma=1.5;
 n_to_k_factor=k1/n1;
 x = 1:k1;
 y = 1:k2;
@@ -63,7 +64,7 @@ end
 %% create behavior
 T = 5000;
 rng(0);
-sdf = 5.*randn(2,T);
+sdf = 2.*randn(2,T);
 sdf(:,1) = [k1 k2]./2;
 xy = cumsum(sdf,2);
 xlimits = [0 k1+1];
@@ -113,7 +114,8 @@ axis tight
 %% plot nice behavior figure
 figure
 hold on
-IX = 1:5000;
+% IX = 1:5000;
+IX = 1:T;
 % plot(smooth(xy(1,IX)), smooth(xy(2,IX)),'-k')
 plot(xy(1,IX), xy(2,IX),'-k')
 axis equal
@@ -161,17 +163,30 @@ FR = log(M2(:,pos_IX));
 %% add low-dim activity
 rng(0);
 N = size(FR,1);
-R = 2;
+% R = 2;
+R = 1;
 T = size(FR,2);
-U2 = randn(N,R);
-V2 = randn(R,T).*5;
-h = fspecial('gaussian',[1 1000],250);
-V2 = imfilter(V2,h);
+uv_pattern = 'rand_smooth';
+% uv_pattern = 'linear_monotonic_EI';
+switch uv_pattern
+    case 'rand_smooth'
+        U2 = rand(N,R);
+        V2 = randn(R,T).*1;
+        h = fspecial('gaussian',[1 1000],50);
+        V2 = imfilter(V2,h,'symmetric');
+    case 'linear_monotonic_EI'
+        U2 = zeros(N,R);
+        U2(1:(N/2),1) = 1;
+        U2((N/2+1):end,2) = 1;
+        V2 = [linspace(0,1,T);linspace(0,-1,T)];
+        V2 = V2.*0.5;
+end
 figure
 hold on
 plot(V2')
-
-% FR = FR + U2*V2;
+%%
+% FR(:)=0;
+FR = FR + U2*V2;
 
 %% add activity dependent on other variables (HD/speed)
 % FR = FR + HD_FR(:,HD_IX);
@@ -182,12 +197,13 @@ spikes = poissrnd(exp(FR));
 
 %% plot activity of single cell
 figure
-plot(exp(FR(2,:)))
+plot(spikes(1,:))
 
 %% validate we get nice tuning curves
 % time_spent = histcounts(
-cell_num = 46;
-A=accumarray(xy_binned(1,:)', FR(cell_num,:)',[k1 1],@mean,nan);
+cell_num = 20;
+A=accumarray(xy_binned(1,:)', spikes(cell_num,:)',[k1 1],@mean,nan);
+figure
 plot(A)
 
 
@@ -257,18 +273,23 @@ X = pos;
 N = size(spikes,1);
 T = size(spikes,2);
 P = size(X,1);
-R = 2;
-U = randn(N,R);
-V = randn(R,T);
-W = randn(N,P);
-nIter = 10;
+R = 1;
+U = rand(N,R);
+V = rand(R,T);
+W = rand(N,P).*20;
+nIter = 50;
 tic
-fval=[];
 options = optimoptions('fminunc','SpecifyObjectiveGradient',true);
 % options = optimoptions('fmincon','SpecifyObjectiveGradient',true);
 % options.CheckGradients = true;
 % U(:)=0;
 % V(:)=0;
+% W(:)=0;
+% V = V2;
+% U = U2;
+tic
+opttime=nan(3,nIter);
+fval=nan(3,nIter);
 for iter=1:nIter
     disp(iter);
 %     A = sparse(-eye(numel(W)));
@@ -276,11 +297,40 @@ for iter=1:nIter
 %     lb = -10*ones(numel(W),1);
 %     [W fval(1,iter)] = fmincon(@(W)optW(Y,U,V,W,X),W,A,b,[],[],[],[],[],options);
 %     [W fval(1,iter)] = fmincon(@(W)optW(Y,U,V,W,X),W,[],[],[],[],lb,[],[],options);
-    [W fval(1,iter)] = fminunc(@(W)optW(Y,U,V,W,X),W,options);
-    [U fval(2,iter)] = fminunc(@(U)optU(Y,U,V,W,X),U,options);
-    [V fval(3,iter)] = fminunc(@(V)optV(Y,U,V,W,X),V,options);
+    [W fval(1,iter)] = fminunc(@(W)optW(Y,U,V,W,X),W,options); opttime(1,iter)=toc;
+    [U fval(2,iter)] = fminunc(@(U)optU(Y,U,V,W,X),U,options); opttime(2,iter)=toc;
+    [V fval(3,iter)] = fminunc(@(V)optV(Y,U,V,W,X),V,options); opttime(3,iter)=toc;
 end
 toc
+
+%% plot optimization progress
+figure
+subplot(121)
+plot(opttime(:)./60,'o-');
+xlabel('steps')
+ylabel('minutes')
+subplot(122)
+plot(fval(:),'o-');
+xlabel('steps')
+ylabel('loss')
+
+%%
+figure
+hold on
+plot(V2./max(V2),'k','linewidth',2)
+plot(V./max(abs(V)),'r')
+plot(-V./max(abs(V)),'b')
+
+
+%%
+[U3,S3,V3]=svd(U*V);
+diag(S3)
+figure
+subplot(211)
+% plot(-V3(:,1))
+plot(V')
+subplot(212)
+plot(V2')
 
 %% check UV vs. UV2
 corr(V',V2')
@@ -294,8 +344,8 @@ corr(U,U2)
 figure
 hold on
 % plot(imfilter(V,h)')
-plot(V')
-plot(V2')
+plot(zscore(V'))
+% plot(V2')
 
 %% plot W as image per cell
 figure
@@ -304,7 +354,7 @@ for cell=1:size(W,1)
 %     imagesc(reshape(W(cell,:)',[k1 k2]));
     title("cell"+cell)
     colorbar
-    pause
+%     pause
     pause(0.05)
 end
 
@@ -319,17 +369,24 @@ function [f,g] = optW(Y,U,V,W,X)
 end
 function [f,g] = optU(Y,U,V,W,X)
     Yhat = U*V + W*X;
-    f = sum(Yhat.*Y-exp(Yhat),'all');
-    g = (Y-exp(Yhat))*V';
-    f = -f;
-    g = -g;
+    f = -sum(Yhat.*Y-exp(Yhat),'all');
+    g = -(Y-exp(Yhat))*V';
 end
 function [f,g] = optV(Y,U,V,W,X)
     Yhat = U*V + W*X;
-    f = sum(Yhat.*Y-exp(Yhat),'all');
-    g = U'*(Y-exp(Yhat));
-    f = -f;
-    g = -g;
+    f = -sum(Yhat.*Y-exp(Yhat),'all');
+    g = -U'*(Y-exp(Yhat));
+    % add smoothness regularization
+    Vpad = padarray(V,[0 1],'replicate','both');
+    lambda = 1e3;
+    f = f + lambda*sum(diff(Vpad,1,2).^2,'all');
+%     f = f + lambda*sum(V.^2,'all');
+    g = g + 2*lambda.*( 2*V -Vpad(1:end-2) -Vpad(3:end) );
+%     g = g + 2*lambda.*(diff(Vpad(:,1:end-1),1,2) - diff(fliplr(Vpad(:,2:end)),1,2));
+%     g = g + 2*lambda.*( Vpad(:,3:end)-Vpad(:,1:end-2) );
+%     g = g + 2*lambda.*(  diff(fliplr(Vpad(:,1:end-1)),1,2) );
+%     g = g + 2*lambda.*V;
+
 end
 
 
