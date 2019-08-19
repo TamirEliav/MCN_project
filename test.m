@@ -62,7 +62,7 @@ for ii = 1:n1
 end
 
 %% create behavior
-T = 1000;
+T = 500;
 rng(0);
 sdf = 2.*randn(2,T);
 sdf(:,1) = [k1 k2]./2;
@@ -174,6 +174,8 @@ switch uv_pattern
         V2 = randn(R,T).*1;
         h = fspecial('gaussian',[1 1000],50);
         V2 = imfilter(V2,h,'symmetric');
+%         U2 = U2 - mean(U2);
+%         V2 = V2 - mean(V2);
     case 'linear_monotonic_EI'
         U2 = zeros(N,R);
         U2(1:(N/2),1) = 1;
@@ -266,6 +268,7 @@ end
 pos = zeros(k1*k2,T);
 IX = sub2ind(size(pos), pos_IX, 1:length(pos_IX));
 pos(IX) = 1;
+pos = [pos ; ones(1,T)];
 
 %% try our model
 Y = spikes;
@@ -277,6 +280,9 @@ R = 1;
 U = rand(N,R);
 V = randn(R,T);
 W = rand(N,P).*sqrt(log(20));
+W(:,end) = 0; % zero base line
+% U = U - mean(U(:));
+% V = V - mean(V(:));
 nIter = 10;
 tic
 options = optimoptions('fminunc','SpecifyObjectiveGradient',true);
@@ -288,8 +294,8 @@ options = optimoptions('fminunc','SpecifyObjectiveGradient',true);
 % V = V2;
 % U = U2;
 tic
-opttime=nan(3,nIter);
-fval=nan(3,nIter);
+opttime=nan(4,nIter);
+fval=nan(4,nIter);
 for iter=1:nIter
     disp(iter);
 %     A = sparse(-eye(numel(W)));
@@ -297,11 +303,18 @@ for iter=1:nIter
 %     lb = -10*ones(numel(W),1);
 %     [W fval(1,iter)] = fmincon(@(W)optW(Y,U,V,W,X),W,A,b,[],[],[],[],[],options);
 %     [W fval(1,iter)] = fmincon(@(W)optW(Y,U,V,W,X),W,[],[],[],[],lb,[],[],options);
-    [W fval(1,iter)] = fminunc(@(W)optW(Y,U,V,W,X),W,options); opttime(1,iter)=toc;
-    [U fval(2,iter)] = fminunc(@(U)optU(Y,U,V,W,X),U,options); opttime(2,iter)=toc;
+%     [W fval(1,iter)] = fminunc(@(W)optW(Y,U,V,W,X),W,options); opttime(1,iter)=toc;
+%     [U fval(2,iter)] = fminunc(@(U)optU(Y,U,V,W,X),U,options); opttime(2,iter)=toc;
+    
+    UW = UW_join(U,W);
+    [UW fval(4,iter)] = fminunc(@(UW)optUW(Y,UW,V,X),UW,options); opttime(4,iter)=toc;
+    [U,W] = UW_split(UW,R,P);
+    
     [V fval(3,iter)] = fminunc(@(V)optV(Y,U,V,W,X),V,options); opttime(3,iter)=toc;
 end
 toc
+b = W(:,end);
+W(:,end) = [];
 
 %% plot optimization progress
 figure
@@ -354,13 +367,6 @@ plot(zscore(V2),'k','linewidth',2)
 title('V vs V2 (zscore)')
 legend({'estimated','-estimated','real'})
 
-%%
-figure
-hold on
-% plot(imfilter(V,h)')
-plot(zscore(V'))
-% plot(V2')
-
 %% plot W as image per cell
 figure
 for cell=1:size(W,1)
@@ -371,21 +377,38 @@ for cell=1:size(W,1)
 %     pause
     pause(0.05)
 end
+
+%% plot baseline term
+figure
+hold on
+imagesc(1:k1,1:k2,reshape(b,[n1 n2]))
+plot(xy(1,:),xy(2,:),'.k')
+colorbar
+xlabel('neuron_X')
+ylabel('neuron_Y')
+legend('behavior')
+title('baseline term per neuron by position')
+
 %%
 figure
-subplot(311)
+subplot(411)
 imagesc(U2*V2)
 colorbar
 title('real')
 
-subplot(312)
+subplot(412)
 imagesc(U*V)
 title('estimated')
 colorbar
 
-subplot(313)
+subplot(413)
 imagesc(zscore(U*V,1,2))
 title('estimated (zscored)')
+colorbar
+
+subplot(414)
+imagesc(exp(U2*V2))
+title('spiking activity')
 colorbar
 
 %%
@@ -398,7 +421,7 @@ xlabel('max FR');
 ylabel('counts');
 legend({'estimated';'real'})
 h=gca;
-h.XScale = 'log';
+% h.XScale = 'log';
 title('max W vs. max real pos FR')
 
 %% optimization functions
@@ -428,13 +451,37 @@ function [f,g] = optV(Y,U,V,W,X)
     Vpad = padarray(V,[0 1],'replicate','both');
     lambda = 1e3;
     f = f + lambda*sum(diff(Vpad,1,2).^2,'all');
-    g = g + 2*lambda.*( 2*V -Vpad(1:end-2) -Vpad(3:end) );
-
+    g = g + 2*lambda.*( 2*V -Vpad(:,1:end-2) -Vpad(:,3:end) );
+    % add L2 regularization for V
+    lambda = 1;
+    f = f + lambda*norm(V,'fro')^2;
+    g = g + 2*lambda*V;
 end
-function [f,g] = optUW(Y,U,V,W,X)
-    
+function [f,g] = optUW(Y,UW,V,X)
+    R = size(V,1);
+    P = size(X,1);
+    [U,W] = UW_split(UW,R,P);
+    Yhat = U*V + W*X;
+    f = -sum(Yhat.*Y-exp(Yhat),'all');
+    gW = -(Y-exp(Yhat))*X';
+    gU = -(Y-exp(Yhat))*V';
+    % add L2 regularization for U
+    lambda = 1;
+    f = f + lambda*norm(U,'fro')^2;
+    gU = gU + 2*lambda*U;
+    % add L2 regularization for W
+    lambda = 1;
+    f = f + lambda*norm(U,'fro')^2;
+    gW = gW + 2*lambda*W;
+    g = UW_join(gU,gW);
 end
-
+function UW = UW_join(U,W)
+    UW = [U W];
+end
+function [U,W] = UW_split(UW,R,P)
+    U = UW(:,1:R);
+    W = UW(:,(R+1):end);
+end
 
 %%
 
