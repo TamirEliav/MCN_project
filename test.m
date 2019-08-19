@@ -62,7 +62,8 @@ for ii = 1:n1
 end
 
 %% create behavior
-T = 500;
+% T = 1000;
+T = 15*60*20; % 15min@20Hz
 rng(0);
 sdf = 2.*randn(2,T);
 sdf(:,1) = [k1 k2]./2;
@@ -102,14 +103,18 @@ xy_binned(2,xy_binned(2,:)>=k2+1) = k2;
 
 %% plot behavior
 figure
-subplot(1,2,1)
+subplot(221)
 plot(xy(1,:), xy(2,:),'.')
 axis equal
 axis tight
-subplot(1,2,2)
+subplot(222)
 plot(xy_binned(1,:), xy_binned(2,:),'.')
 axis equal
 axis tight
+subplot(223)
+imagesc(accumarray(xy_binned',1,[],@sum));
+colorbar
+title('timespent')
 
 %% plot nice behavior figure
 figure
@@ -172,7 +177,7 @@ switch uv_pattern
     case 'rand_smooth'
         U2 = rand(N,R);
         V2 = randn(R,T).*1;
-        h = fspecial('gaussian',[1 1000],50);
+        h = fspecial('gaussian',[1 1000],round(T/100));
         V2 = imfilter(V2,h,'symmetric');
 %         U2 = U2 - mean(U2);
 %         V2 = V2 - mean(V2);
@@ -270,7 +275,7 @@ IX = sub2ind(size(pos), pos_IX, 1:length(pos_IX));
 pos(IX) = 1;
 pos = [pos ; ones(1,T)];
 
-%% try our model
+%% Run our model !!!
 Y = spikes;
 X = pos;
 N = size(spikes,1);
@@ -283,7 +288,7 @@ W = rand(N,P).*sqrt(log(20));
 W(:,end) = 0; % zero base line
 % U = U - mean(U(:));
 % V = V - mean(V(:));
-nIter = 10;
+nIter = 100;
 tic
 options = optimoptions('fminunc','SpecifyObjectiveGradient',true);
 % options = optimoptions('fmincon','SpecifyObjectiveGradient',true);
@@ -334,10 +339,9 @@ plot(V2./max(V2),'k','linewidth',2)
 plot(V./max(abs(V)),'r')
 plot(-V./max(abs(V)),'b')
 
-
 %%
 [U3,S3,V3]=svd(U*V);
-diag(S3)
+diag(S3);
 figure
 subplot(211)
 % plot(-V3(:,1))
@@ -348,17 +352,27 @@ plot(V2')
 %% check UV vs. UV2
 figure
 subplot(221)
+hold on
 plot(V2,V,'.')
+xline(mean(V2));
+yline(mean(V));
+vlm = fitlm(V2,V);
+text(0,1.1,"slope="+vlm.Coefficients.Estimate(2),'units','normalized')
 axis equal
 xlabel('real')
 ylabel('estimated')
 title('V')
+
 subplot(222)
+hold on
 plot(U2,U,'.')
+xline(mean(U2));
+yline(mean(U));
 % axis equal
 xlabel('real')
 ylabel('estimated')
 title('U')
+
 subplot(212)
 hold on
 plot(zscore(V))
@@ -369,27 +383,37 @@ legend({'estimated','-estimated','real'})
 
 %% plot W as image per cell
 figure
+mov(size(W,1)) = struct('cdata',[],'colormap',[]);
 for cell=1:size(W,1)
     imagesc(exp(reshape(W(cell,:)',[k1 k2])))
 %     imagesc(reshape(W(cell,:)',[k1 k2]));
     title("cell"+cell)
     colorbar
+    drawnow
+    mov(cell) = getframe(gcf);
 %     pause
     pause(0.05)
 end
 
-%% plot baseline term
+%% write movie file
+movfile = 'C:\Tamir\work\Courses\MBL\project\figures\20190819_3hours_run\estimated_maps.avi';
+vr = VideoWriter(movfile );
+open(vr);
+writeVideo(vr,mov);
+close(vr);
+
+%% plot baseline term (per neuron by position)
 figure
 hold on
-imagesc(1:k1,1:k2,reshape(b,[n1 n2]))
-plot(xy(1,:),xy(2,:),'.k')
+imagesc(1:n1,1:n2,reshape(b,[n1 n2]))
+% plot(xy(1,:),xy(2,:),'.k')
 colorbar
 xlabel('neuron_X')
 ylabel('neuron_Y')
-legend('behavior')
+% legend('behavior')
 title('baseline term per neuron by position')
 
-%%
+%% plot full UV matrix
 figure
 subplot(411)
 imagesc(U2*V2)
@@ -411,9 +435,56 @@ imagesc(exp(U2*V2))
 title('spiking activity')
 colorbar
 
-%%
+%% plot UV error per neuron by position
+sdf=zscore(U*V,1,2);
+sdf2 = mean(sdf);
+sdf3 = (sdf-sdf2).^2;
+sdf4 = sum(sdf3,2);
+whos sdf sdf2 sdf3 sdf4
 figure
-histogram(max(exp(W)))
+subplot(311)
+imagesc(sdf)
+colorbar
+subplot(312)
+imagesc(sdf3)
+colorbar
+
+subplot(313)
+hold on
+imagesc(1:n1,1:n2,reshape(sdf4,[n1 n2]))
+axis equal
+% plot(xy(1,:),xy(2,:),'.k')
+colorbar
+xlabel('neuron_X')
+ylabel('neuron_Y')
+% legend('behavior')
+title('UV error per neuron by position')
+
+%% comparing Wmax / baseline / UV error
+figure
+suptitle('comparing UV error vs Wmax / baseline')
+subplot(221)
+plot(sdf4, max(exp(W),[],2) , 'o')
+xlabel('UV error')
+ylabel('maxW')
+subplot(222)
+plot(sdf4,b, 'o')
+xlabel('UV error')
+ylabel('baseline')
+subplot(223)
+plot(sdf4,U, 'o')
+xlabel('UV error')
+ylabel('U')
+subplot(224)
+plot(U, max(exp(W),[],2) , 'o')
+xlabel('U')
+ylabel('Wmax')
+
+
+%% plot Wmax histograms
+figure
+subplot(121)
+histogram(max(exp(W),[],2))
 h=xline(max_FR);
 h.Color = 'r';
 h.LineWidth = 2;
@@ -423,6 +494,15 @@ legend({'estimated';'real'})
 h=gca;
 % h.XScale = 'log';
 title('max W vs. max real pos FR')
+
+subplot(122)
+imagesc(1:n1,1:n2,reshape(max(exp(W),[],2),[n1 n2]))
+axis equal
+colorbar
+xlabel('neuron_X')
+ylabel('neuron_Y')
+% legend('behavior')
+title('Wmax per neuron by position')
 
 %% optimization functions
 function [f,g] = optW(Y,U,V,W,X)
