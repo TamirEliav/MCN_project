@@ -62,8 +62,8 @@ for ii = 1:n1
 end
 
 %% create behavior
-% T = 1000;
-T = 15*60*20; % 15min@20Hz
+T = 1000;
+% T = 15*60*20; % 15min@20Hz
 rng(0);
 sdf = 2.*randn(2,T);
 sdf(:,1) = [k1 k2]./2;
@@ -288,19 +288,20 @@ W = rand(N,P).*sqrt(log(20));
 W(:,end) = 0; % zero base line
 % U = U - mean(U(:));
 % V = V - mean(V(:));
-nIter = 100;
+nIter = 200;
 tic
 options = optimoptions('fminunc','SpecifyObjectiveGradient',true);
 % options = optimoptions('fmincon','SpecifyObjectiveGradient',true);
 % options.CheckGradients = true;
 % U(:)=0;
 % V(:)=0;
-% W(:)=0;
+W(:)=0;
 % V = V2;
 % U = U2;
 tic
 opttime=nan(4,nIter);
 fval=nan(4,nIter);
+UVW = UVW_join(U,V,W);
 for iter=1:nIter
     disp(iter);
 %     A = sparse(-eye(numel(W)));
@@ -311,12 +312,14 @@ for iter=1:nIter
 %     [W fval(1,iter)] = fminunc(@(W)optW(Y,U,V,W,X),W,options); opttime(1,iter)=toc;
 %     [U fval(2,iter)] = fminunc(@(U)optU(Y,U,V,W,X),U,options); opttime(2,iter)=toc;
     
-    UW = UW_join(U,W);
-    [UW fval(4,iter)] = fminunc(@(UW)optUW(Y,UW,V,X),UW,options); opttime(4,iter)=toc;
-    [U,W] = UW_split(UW,R,P);
+%     UW = UW_join(U,W);
+%     [UW fval(4,iter)] = fminunc(@(UW)optUW(Y,UW,V,X),UW,options); opttime(4,iter)=toc;
+%     [U,W] = UW_split(UW,R,P);
+%     [V fval(3,iter)] = fminunc(@(V)optV(Y,U,V,W,X),V,options); opttime(3,iter)=toc;
     
-    [V fval(3,iter)] = fminunc(@(V)optV(Y,U,V,W,X),V,options); opttime(3,iter)=toc;
+    [UVW fval(1,iter)] = fminunc(@(UVW)optUVW(Y,UVW,X,R,P,N,T),UVW,options); opttime(1,iter)=toc;
 end
+[U,V,W] = UVW_split(UVW,R,P,N,T);
 toc
 b = W(:,end);
 W(:,end) = [];
@@ -368,7 +371,9 @@ hold on
 plot(U2,U,'.')
 xline(mean(U2));
 yline(mean(U));
-% axis equal
+ulm = fitlm(U2,U);
+text(0,1.1,"slope="+ulm.Coefficients.Estimate(2),'units','normalized')
+axis equal
 xlabel('real')
 ylabel('estimated')
 title('U')
@@ -380,12 +385,14 @@ plot(-zscore(V))
 plot(zscore(V2),'k','linewidth',2)
 title('V vs V2 (zscore)')
 legend({'estimated','-estimated','real'})
+text(0.5,1.2,"Uslope*Vslope="+vlm.Coefficients.Estimate(2) * ulm.Coefficients.Estimate(2),...
+    'units','normalized','HorizontalAlignment','center')
 
 %% plot W as image per cell
 figure
 mov(size(W,1)) = struct('cdata',[],'colormap',[]);
 for cell=1:size(W,1)
-    imagesc(exp(reshape(W(cell,:)',[k1 k2])))
+    imagesc(exp(reshape(b(cell)+W(cell,:)',[k1 k2])))
 %     imagesc(reshape(W(cell,:)',[k1 k2]));
     title("cell"+cell)
     colorbar
@@ -440,7 +447,7 @@ sdf=zscore(U*V,1,2);
 sdf2 = mean(sdf);
 sdf3 = (sdf-sdf2).^2;
 sdf4 = sum(sdf3,2);
-whos sdf sdf2 sdf3 sdf4
+% whos sdf sdf2 sdf3 sdf4
 figure
 subplot(311)
 imagesc(sdf)
@@ -484,7 +491,7 @@ ylabel('Wmax')
 %% plot Wmax histograms
 figure
 subplot(121)
-histogram(max(exp(W),[],2))
+histogram(b+max(exp(W),[],2))
 h=xline(max_FR);
 h.Color = 'r';
 h.LineWidth = 2;
@@ -496,7 +503,7 @@ h=gca;
 title('max W vs. max real pos FR')
 
 subplot(122)
-imagesc(1:n1,1:n2,reshape(max(exp(W),[],2),[n1 n2]))
+imagesc(1:n1,1:n2,reshape(b+max(exp(W),[],2),[n1 n2]))
 axis equal
 colorbar
 xlabel('neuron_X')
@@ -562,6 +569,45 @@ function [U,W] = UW_split(UW,R,P)
     U = UW(:,1:R);
     W = UW(:,(R+1):end);
 end
+function [f,g] = optUVW(Y,UVW,X,R,P,N,T)
+    [U,V,W] = UVW_split(UVW,R,P,N,T);
+    Yhat = U*V + W*X;
+    f = -sum(Yhat.*Y-exp(Yhat),'all');
+    gW = -(Y-exp(Yhat))*X';
+    gU = -(Y-exp(Yhat))*V';
+    gV = -U'*(Y-exp(Yhat));
+    % add L2 regularization for U
+    lambda = 1;
+    f = f + lambda*norm(U,'fro')^2;
+    gU = gU + 2*lambda*U;
+    % add L2 regularization for W
+    lambda = 1;
+    f = f + lambda*norm(U,'fro')^2;
+    gW = gW + 2*lambda*W;
+    % add smoothness regularization on V
+    Vpad = padarray(V,[0 1],'replicate','both');
+    lambda = 1e3;
+    f = f + lambda*sum(diff(Vpad,1,2).^2,'all');
+    gV = gV + 2*lambda.*( 2*V -Vpad(:,1:end-2) -Vpad(:,3:end) );
+    % add L2 regularization for V
+    lambda = 1;
+    f = f + lambda*norm(V,'fro')^2;
+    gV = gV + 2*lambda*V;
+    
+    g = UVW_join(gU,gV,gW);
+end
+function UVW = UVW_join(U,V,W)
+    UVW = [U(:);V(:);W(:)];
+end
+function [U,V,W] = UVW_split(UVW,R,P,N,T)
+    U = UVW(              1:(N*R)  );
+    V = UVW( (N*R)     + (1:(R*T)) );
+    W = UVW( (N*R+R*T) + (1:(N*P)) );
+    U = reshape(U,[N R]);
+    V = reshape(V,[R T]);
+    W = reshape(W,[N P]);
+end
+
 
 %%
 
