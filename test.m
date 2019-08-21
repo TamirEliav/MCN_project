@@ -250,7 +250,9 @@ figure
 scatter3(score(:,1),score(:,2),score(:,3),5,cmap(xy_binned(1,:),:));
 figure
 scatter3(score(:,1),score(:,2),score(:,3),5,cmap(xy_binned(2,:),:));
-
+figure
+cmap = jet(100);
+scatter3(score(:,1),score(:,2),score(:,3),5,cmap(round(1+99*(V2-min(V2))./range(V2)),:));
 %% PCA
 IX = find(sqrt(sum((xy-50).^2)) < 50);
 % [coeff,score,latent,tsquared,explained,mu] = pca(activity(:,IX)');
@@ -258,6 +260,10 @@ figure
 scatter3(score(IX,1),score(IX,2),score(IX,3),5,cmap(xy_binned(1,IX),:));
 figure
 scatter3(score(IX,1),score(IX,2),score(IX,3),5,cmap(xy_binned(2,IX),:))
+
+%% save a video of the PCA from different angles
+OptionZ.FrameRate=15;OptionZ.Duration=5.5;OptionZ.Periodic=true;
+CaptureFigVid([-20,10;-110,10;-190,80;-290,10;-380,10], 'WellMadeVid',OptionZ)
 
 %% plot PCA coeff
 figure
