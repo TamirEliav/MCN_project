@@ -2,6 +2,17 @@
 clear
 clc
 
+%% set main dir
+% main_dir = 'C:\Tamir\work\Courses\MBL\project\figures\buzsaki\opt_UVW_pos_R=1__run2';
+% main_dir = 'C:\Tamir\work\Courses\MBL\project\figures\buzsaki\opt_UVW_WX=0_pos_R=1';
+% main_dir = 'C:\Tamir\work\Courses\MBL\project\figures\buzsaki\opt_UVW_UV=0_pos_R=0';
+main_dir = 'C:\Tamir\work\Courses\MBL\project\figures\buzsaki\opt_UVW_pos_R=2';
+mkdir(main_dir)
+
+%% 
+set(0,'defaulttextfontsize',15);
+set(0,'defaultaxesfontsize',15);
+
 %% load data
 load('C:\Tamir\work\Courses\MBL\project\Datasets\buzsaki\Achilles_11012013.tar\Achilles_11012013\Achilles_11012013_sessInfo.mat')
 pos = sessInfo.Position;
@@ -39,7 +50,7 @@ for ii_cell = 1:length(cell_IDs)
     cla
     plot(pos.TimeStamps, pos.OneDLocation, '.k');
     plot(cell.ts, cell.pos1D, '.r');
-    title("cell"+cell.ID);
+    title(sprintf('cell %d(%d)',ii_cell,cell.ID));
     pause
 end
 
@@ -103,6 +114,7 @@ X(IX) = 1;
 X(:,invalid_IX) = [];
 t = pos.t_new;
 t(invalid_IX) = [];
+vel = interp1(pos.TimeStamps,pos.vel_2D_diff,t, 'linear','extrap');
 
 %% prepare data (spikes)
 cell_IDs = spikes.PyrIDs;
@@ -145,22 +157,68 @@ colorbar
 hax=findall(gcf,'type','axes');
 linkaxes(hax,'x')
 
+%% calculate naive FR maps
+time_spent = sum(X');
+[r,c] = find(X);
+FR_all_naive = [];
+for ii_cell = 1:N
+    spike_counts = accumarray(r,Y(ii_cell,:),[],@sum);
+    FR_all_naive(ii_cell,:) = spike_counts ./ time_spent';
+end
+FR_all_naive = fs_new .* FR_all_naive; % Hz
+
+% now remove stationary times
+X_move = X;
+Y_move = Y;
+vel_thr = 0.2;
+static_IX = find(vel<vel_thr);
+X_move(:,static_IX) = [];
+Y_move(:,static_IX) = [];
+
+time_spent_move = sum(X_move');
+[r,c] = find(X_move);
+FR_all_naive_move = [];
+for ii_cell = 1:N
+    spike_counts = accumarray(r,Y_move(ii_cell,:),[],@sum);
+    FR_all_naive_move(ii_cell,:) = spike_counts ./ time_spent_move';
+end
+FR_all_naive_move = fs_new .* FR_all_naive_move; % Hz
+
+figure('Units','normalized','Position',[0 0 1 1]);
+subplot(121)
+imagesc(FR_all_naive)
+colorbar
+xlabel('position')
+ylabel('cell')
+title('all points');
+subplot(122)
+imagesc(FR_all_naive_move)
+colorbar
+xlabel('position')
+ylabel('cell')
+title('only during movement');
+
+suptitle('Naive FR maps')
+fileout = fullfile(main_dir,'naive_FR_maps');
+saveas(gcf,fileout,'tif');
+saveas(gcf,fileout,'fig');
+
 %% run the model !!!
-R = 2;
+rng(0);
+R = 0;
 U = rand(N,R);
 V = randn(R,T);
 W = rand(N,P);
-W(:,end) = 0; % zero base line
+% W(:,end) = 0; % zero base line
 % U = U - mean(U(:));
 % V = V - mean(V(:));
 nIter = 15;
 tic
 options = optimoptions('fminunc','SpecifyObjectiveGradient',true);
-% options = optimoptions('fmincon','SpecifyObjectiveGradient',true);
-% options.CheckGradients = true;
 % U(:)=0;
 % V(:)=0;
 % W(:)=0;
+% X(:)=0;
 % V = V2;
 % U = U2;
 
@@ -190,9 +248,12 @@ end
 [U,V,W] = UVW_split(UVW,R,P,N,T);
 toc
 
-%% seperate b from W
-% b = W(:,end);
-% W(:,end) = [];
+Yhat = U*V + W*X;
+log_likelihood_final = sum(Yhat.*Y-exp(Yhat),'all');
+
+%% save results!
+fileout = fullfile(main_dir,'results');
+save(fileout);
 
 %% plot optimization progress
 figure
@@ -208,49 +269,66 @@ plot(fval','o-');
 xlabel('steps')
 ylabel('loss')
 % legend({'UW';'V'})
+fileout = fullfile(main_dir,'opt_progress');
+saveas(gcf,fileout,'tif');
+saveas(gcf,fileout,'fig');
+
 
 %% plot V / UV / WX / FR / Y
-vel = interp1(pos.TimeStamps,pos.vel_2D_diff,t, 'linear','extrap');
-figure
+sort_by = 'cell_ID';
+% sort_by = 'U';
+switch sort_by 
+    case 'cell_ID'
+        sort_IX = 1:N;
+    case 'U'
+        [~,sort_IX] = sort(U);
+end
+figure('Units','normalized','Position',[0 0 1 1]);
 subplot(511)
 yyaxis left
-plot(V(2,:))
+% plot(V(1,:))
 yyaxis right
 plot(vel)
-legend({'V';'velocity'})
+hl=legend({'V';'velocity'},'Location','northeastoutside');
+hax = gca;
+hl.Position = [hax.Position(1)+hax.Position(3)-0.05 hax.Position(2)+hax.Position(4)+0.02 0.02 0.2*hax.Position(4)];
 axis tight
 title('V vs. velocity')
-xlabel('time')
+% xlabel('time')
 
 subplot(512)
-imagesc(U*V)
+sdf=U*V;
+imagesc(sdf(sort_IX,:))
 title('UV')
-xlabel('time')
+% xlabel('time')
 ylabel('cells')
 hax= gca;
 hcl=colorbar('eastoutside');
 hcl.Position = [hax.Position(1)+hax.Position(3)+0.02 hax.Position(2) 0.02 hax.Position(4)];
 
 subplot(513)
-imagesc(W*X)
+sdf = W*X;
+imagesc(sdf(sort_IX,:))
 title('WX')
-xlabel('time')
+% xlabel('time')
 ylabel('cells')
 hax= gca;
 hcl=colorbar('eastoutside');
 hcl.Position = [hax.Position(1)+hax.Position(3)+0.02 hax.Position(2) 0.02 hax.Position(4)];
 
 subplot(514)
-imagesc(fs_new*exp(U*V+W*X))
+sdf = fs_new*exp(U*V+W*X);
+imagesc(sdf(sort_IX,:))
 title('estimate FR')
-xlabel('time')
+% xlabel('time')
 ylabel('cells')
 hax= gca;
 hcl=colorbar('eastoutside');
 hcl.Position = [hax.Position(1)+hax.Position(3)+0.02 hax.Position(2) 0.02 hax.Position(4)];
 
 subplot(515)
-imagesc(Y)
+sdf = fs_new*Y;
+imagesc(sdf(sort_IX,:))
 title('Y')
 xlabel('time')
 ylabel('cells')
@@ -262,17 +340,108 @@ hcl.Position = [hax.Position(1)+hax.Position(3)+0.02 hax.Position(2) 0.02 hax.Po
 hax=findall(gcf,'type','axes');
 linkaxes(hax,'x')
 
+fileout = fullfile(main_dir,sprintf('components_breakdown_sort_by_%s',sort_by));
+saveas(gcf,fileout,'tif');
+saveas(gcf,fileout,'fig');
+
+xlim([2320 2750])
+fileout = fullfile(main_dir,sprintf('components_breakdown_sort_by_%s_ZOOM_IN',sort_by));
+saveas(gcf,fileout,'tif');
+saveas(gcf,fileout,'fig');
+
 %% plot V vs. velocity
 figure
-subplot(211)
 plot(vel,V(1,:),'.')
-lm = fitlm(vel,V(1,:))
+lm = fitlm(vel,V(1,:));
 xlabel('velocity')
-ylabel('V1')
-subplot(212)
-plot(vel,V(2,:),'.')
-xlabel('velocity')
-ylabel('V2')
+ylabel('V')
+xlim([0 1.5])
+text(0.8,0.95,sprintf('R = %.2f',lm.Rsquared.Ordinary),'Units','normalized');
+fileout = fullfile(main_dir,'V_vs_speed');
+saveas(gcf,fileout,'tif');
+saveas(gcf,fileout,'fig');
+
+%% compare W to FR map (single cells)
+% cells_list = [2 33 45 47 53 87];
+% ex_IX = 6;
+% cell_num = cells_list(ex_IX);
+mkdir(fullfile(main_dir,'cells_FR'))
+figure
+hold on
+FR_all_W = [];
+for cell_num = 1:N
+    cell_ID = cell_IDs(cell_num);
+    FR_all_W = fs_new*exp(W);
+    cla
+    plot(FR_all_naive(cell_num,:))
+    plot(FR_all_naive_move(cell_num,:))
+    plot(FR_all_W(cell_num,:))
+    xlabel('position')
+    ylabel('Firing rate (Hz)')
+    legend({'naive FR (all points)';'naive FR (speed thr)';'W estimation'},...
+        'Location','best')
+    title(sprintf('cell %d (%d)',cell_num,cell_ID))
+    fileout = fullfile(main_dir,'cells_FR',sprintf('cell_%d(%d)',cell_num,cell_ID));
+    saveas(gcf,fileout,'tif');
+    saveas(gcf,fileout,'fig');
+end
+
+%% calculate SI
+prob = time_spent./sum(time_spent);
+r_i = FR_all_naive;
+r_i = r_i - min(r_i,[],2);
+meanFR = sum(r_i .* prob,2);
+SI = sum((prob.*r_i).*log2((r_i+eps)./meanFR),2);
+SI_all_naive = SI ./ meanFR; % convert to bit/spike
+
+prob = time_spent_move./sum(time_spent_move);
+r_i = FR_all_naive_move;
+r_i = r_i - min(r_i,[],2);
+meanFR = sum(r_i .* prob,2);
+SI = sum((prob.*r_i).*log2((r_i+eps)./meanFR),2);
+SI_all_naive_move = SI ./ meanFR; % convert to bit/spike
+
+prob = time_spent./sum(time_spent);
+r_i = FR_all_W;
+r_i = r_i - min(r_i,[],2);
+meanFR = sum(r_i .* prob,2);
+SI = sum((prob.*r_i).*log2((r_i+eps)./meanFR),2);
+SI_all_W = SI ./ meanFR; % convert to bit/spike
+
+%% compare W to FR map (population)
+rho1 = corr(FR_all_W',FR_all_naive');
+rho2 = corr(FR_all_W',FR_all_naive_move');
+edges = linspace(-1,1,50);
+figure('Units','normalized','Position',[0.1 0.2 0.7 0.5])
+subplot(131)
+hold on
+histogram(diag(rho1),edges)
+histogram(diag(rho2),edges)
+legend({'all points';'speed thr'},'Location','northoutside')
+xlabel('correlation')
+ylabel('counts')
+title('corr W vs. naive')
+subplot(132)
+hold on
+ksdensity(SI_all_naive)
+ksdensity(SI_all_naive_move)
+ksdensity(SI_all_W)
+xlabel('SI')
+ylabel('density')
+title('spatial information')
+legend({'naive (all points)';'naive (speed thr)';'W'},'Location','northoutside')
+subplot(133)
+hold on
+ksdensity(max(FR_all_naive))
+ksdensity(max(FR_all_naive_move))
+ksdensity(max(FR_all_W))
+xlabel('max FR (Hz)')
+ylabel('density')
+title('Max FR')
+legend({'naive (all points)';'naive (speed thr)';'W'},'Location','northoutside')
+fileout = fullfile(main_dir,'compare_FR_W_vs_naive_population');
+saveas(gcf,fileout,'tif');
+saveas(gcf,fileout,'fig');
 
 %% plot W
 WW = Y/X;
@@ -293,6 +462,7 @@ colorbar
 figure
 imagesc(VV)
 colorbar
+
 %%
 figure
 yyaxis left
@@ -302,7 +472,7 @@ plot(VV(:,2),'r')
 yyaxis right
 plot(vel,'k')
 
-%% 
+%% plot xcorr between V1/V2/velocity
 figure
 subplot(221)
 [c,lags] = xcorr(VV(:,1),vel);
